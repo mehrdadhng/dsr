@@ -1,0 +1,1 @@
+sudo docker run -it --rm  --privileged -v /lib/modules/:/lib/modules:ro --network=lb_ebpf --name "balancer" -h "balancer" --ip="10.89.0.3" --mac-address="00:00:00:00:00:03"  --env TERM=xterm-color ubuntu:ebpf

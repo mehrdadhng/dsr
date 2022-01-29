@@ -1,0 +1,6 @@
+*.backup
+.ccls-cache
+TODO.md
+.vscode
+*.o
+*.ll

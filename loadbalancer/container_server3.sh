@@ -1,0 +1,2 @@
+sudo docker run -it --rm  --privileged -v /lib/modules/:/lib/modules:ro --network=lb_ebpf --name "server3" -h "server3" --ip="10.89.0.6" --mac-address="00:00:00:00:00:06"  --env TERM=xterm-color ubuntu:ebpf
+#sudo docker run -d --rm  --privileged -v /lib/modules/:/lib/modules:ro --network=lb_ebpf --name "server3" -h "server3" --ip="10.89.0.6" --mac-address="00:00:00:00:00:06"  --env TERM=xterm-color nginxdemos/hello:plain-text
