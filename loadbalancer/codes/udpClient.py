@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import fcntl
 import struct
 import ipaddress
+import random
 
 def clear_arp(ip, ifname=''):
     while True:
@@ -24,24 +25,23 @@ UDP_IP = "10.89.0.3"
 UDP_PORT = 3000
 
 print("UDP target IP:", UDP_IP)
-print("UDP target port:", UDP_PORT)
 #print("message:", MESSAGE)
 
 list = []
 # Create a UDP socket
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-server_address = (UDP_IP, UDP_PORT)
 print("200 iterations, each iteration: 10000 packets...")
 try:
     # Send data
     #print ('sending {}'.format(MESSAGE))
+    server_address = (UDP_IP , UDP_PORT)
     for k in range(200):
         start = time.perf_counter()
         for i in range(10000):
             sent = sock.sendto(MESSAGE.encode(), server_address)
             data, server = sock.recvfrom(4096)
-            clear_arp('10.89.0.3')
+            #clear_arp('10.89.0.3')
         end = time.perf_counter()
         list.append((end - start))
         sys.stdout.write("completed: %d%%\r" % (k/2) )

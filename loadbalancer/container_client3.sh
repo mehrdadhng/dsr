@@ -1,0 +1,1 @@
+sudo docker run -it --rm  --privileged -v /lib/modules/:/lib/modules:ro --network=lb_ebpf --name "client3" -h "client3" --ip="10.89.0.8" --mac-address="00:00:00:00:00:08"  --env TERM=xterm-color ubuntu:ebpf

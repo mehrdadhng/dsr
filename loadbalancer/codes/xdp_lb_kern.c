@@ -15,27 +15,7 @@
 #include "bpf_endian.h"
 #include "bpf_helpers.h"
 #include "jhash.h"
-
-#define MAX_SERVERS 512
-/* 0x3FFF mask to check for fragment offset field */
-#define IP_FRAGMENTED 65343
-
-struct pkt_meta {
-	__be32 src;
-	__be32 dst;
-	union {
-		__u32 ports;
-		__u16 port16[2];
-	};
-};
-
-struct dest_info {
-	__u32 saddr;
-	__u32 daddr;
-	__u64 bytes;
-	__u64 pkts;
-	__u8 dmac[6];
-};
+#include "common.h"
 
 struct bpf_map_def SEC("maps") servers = {
 	.type = BPF_MAP_TYPE_HASH,
@@ -139,21 +119,7 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 		return XDP_DROP;
 	if (iph->ihl != 5)
 		return XDP_DROP;
-	if (is_from_back_servers(iph->saddr)){
-		bpf_printk("%x" , iph->saddr);
-		return XDP_PASS;
-	}
-	unsigned int host_ip = 0xa590001;
-	unsigned int client_ip = 0xa590002;
-	bpf_printk("%x" , bpf_htonl(client_ip));
-	if (iph->saddr != bpf_htonl(client_ip)){
-		bpf_printk("not from client %X" , bpf_ntohl(iph->saddr));
-		return XDP_PASS;
-	}
-	if (iph->saddr == bpf_htonl(client_ip))
-		bpf_printk("yessssss");
-	
-
+	bpf_printk("it\'s an ip packet from %x" , iph->saddr);
 	protocol = iph->protocol;
 	payload_len = bpf_ntohs(iph->tot_len);
 	off += sizeof(struct iphdr);
@@ -161,6 +127,51 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 	/* do not support fragmented packets as L4 headers may be missing */
 	if (iph->frag_off & IP_FRAGMENTED)
 		return XDP_DROP;
+
+	if (iph->protocol == IPPROTO_IPIP){
+		if (bpf_xdp_adjust_head(ctx, 0 + (int)sizeof(struct ethhdr) + (int)sizeof(struct iphdr)))
+			return XDP_DROP;
+		data = (void *)(long)ctx->data;
+		data_end = (void *)(long)ctx->data_end;
+		struct ethhdr *eth = data;
+		if (eth + 1 > data_end)
+			return XDP_DROP;
+		struct iphdr *iph = data + sizeof(struct ethhdr);
+		if (iph + 1 > data_end)
+			return XDP_DROP;
+		unsigned int addrtemp = iph->saddr;
+		iph->saddr = iph->daddr;
+		iph->daddr = addrtemp;
+
+		__u8 tempMac[6];
+		memcpy(tempMac, eth->h_dest, sizeof(eth->h_dest));
+		memcpy(eth->h_dest, eth->h_source, sizeof(eth->h_source));
+		memcpy(eth->h_source, tempMac, sizeof(tempMac));
+
+		if (iph->protocol == IPPROTO_TCP){
+			if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct tcphdr) > data_end)
+				return XDP_DROP;
+			struct tcphdr *tcph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
+			if(tcph + 1 > data_end)
+				return XDP_DROP;
+			unsigned short tempPort = tcph->dest;
+			tcph->dest = tcph->source;
+			tcph->source = tempPort;
+		}
+		else{
+			if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr) > data_end)
+				return XDP_DROP;
+			struct udphdr *udph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
+			if(udph + 1 > data_end)
+				return XDP_DROP;
+			unsigned short tempPort = udph->dest;
+			udph->dest = udph->source;
+			udph->source = tempPort;
+		}
+		iph->check = iph_csum(iph);
+		
+		return XDP_TX;
+	}
 
 	pkt.src = iph->saddr;
 	pkt.dst = iph->daddr;
@@ -226,6 +237,8 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 	__sync_fetch_and_add(&tnl->pkts, 1);
 	__sync_fetch_and_add(&tnl->bytes, pkt_size);
 
+	bpf_printk("in p packet size: %x" , data_end - data);
+
 	return XDP_TX;
 }
 
@@ -245,11 +258,7 @@ int loadbal(struct xdp_md *ctx)
 	eth_proto = eth->h_proto;
 
 	/* demo program only accepts ipv4 packets */
-	if (eth->h_proto == bpf_htons(ETH_P_ARP)){
-			bpf_printk("arp recieved!");
-			return XDP_PASS;
-	}
-	else if (eth_proto == bpf_htons(ETH_P_IP))
+	if (eth_proto == bpf_htons(ETH_P_IP))
 		return process_packet(ctx, nh_off);
 	else
 		return XDP_PASS;
