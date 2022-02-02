@@ -27,7 +27,7 @@ try:
         s.close()
         end = time.perf_counter()
         list.append((end - start))
-        sys.stdout.write("completed: %d%%\r" % (k/2) )
+        sys.stdout.write("completed: %d%%\r" % (k/2))
         sys.stdout.flush()
 finally:
     mean = np.mean(list)
