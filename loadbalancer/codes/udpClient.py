@@ -38,7 +38,7 @@ try:
     server_address = (UDP_IP , UDP_PORT)
     for k in range(200):
         start = time.perf_counter()
-        for i in range(10000):
+        for i in range(100):
             sent = sock.sendto(MESSAGE.encode(), server_address)
             data, server = sock.recvfrom(4096)
             #clear_arp('10.89.0.3')

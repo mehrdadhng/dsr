@@ -1,4 +1,5 @@
 all: xdp_lb_kern.o xdp_server1_kern.o xdp_server2_kern.o xdp_server3_kern.o xdp_lb2_kern.o xdp_lb3_kern.o xdp_server4_kern.o
+
 xdp_lb_kern.o: xdp_lb_kern.c 
 	clang -S \
 	    -target bpf \
@@ -11,6 +12,7 @@ xdp_lb_kern.o: xdp_lb_kern.c
 	    -Wno-compare-distinct-pointer-types \
 	    -O2 -emit-llvm -c -o ${@:.o=.ll} $<
 	llc -march=bpf -filetype=obj -o $@ ${@:.o=.ll}
+
 xdp_lb2_kern.o: xdp_lb2_kern.c 
 	clang -S \
 	    -target bpf \
@@ -23,6 +25,7 @@ xdp_lb2_kern.o: xdp_lb2_kern.c
 	    -Wno-compare-distinct-pointer-types \
 	    -O2 -emit-llvm -c -o ${@:.o=.ll} $<
 	llc -march=bpf -filetype=obj -o $@ ${@:.o=.ll}
+
 xdp_lb3_kern.o: xdp_lb3_kern.c 
 	clang -S \
 	    -target bpf \
@@ -35,6 +38,7 @@ xdp_lb3_kern.o: xdp_lb3_kern.c
 	    -Wno-compare-distinct-pointer-types \
 	    -O2 -emit-llvm -c -o ${@:.o=.ll} $<
 	llc -march=bpf -filetype=obj -o $@ ${@:.o=.ll}
+
 xdp_server1_kern.o: xdp_server1_kern.c 
 	clang -S \
 	    -target bpf \
@@ -47,6 +51,7 @@ xdp_server1_kern.o: xdp_server1_kern.c
 	    -Wno-compare-distinct-pointer-types \
 	    -O2 -emit-llvm -c -o ${@:.o=.ll} $<
 	llc -march=bpf -filetype=obj -o $@ ${@:.o=.ll}
+
 xdp_server2_kern.o: xdp_server2_kern.c 
 	clang -S \
 	    -target bpf \
@@ -59,6 +64,7 @@ xdp_server2_kern.o: xdp_server2_kern.c
 	    -Wno-compare-distinct-pointer-types \
 	    -O2 -emit-llvm -c -o ${@:.o=.ll} $<
 	llc -march=bpf -filetype=obj -o $@ ${@:.o=.ll}
+
 xdp_server3_kern.o: xdp_server3_kern.c 
 	clang -S \
 	    -target bpf \
@@ -71,6 +77,7 @@ xdp_server3_kern.o: xdp_server3_kern.c
 	    -Wno-compare-distinct-pointer-types \
 	    -O2 -emit-llvm -c -o ${@:.o=.ll} $<
 	llc -march=bpf -filetype=obj -o $@ ${@:.o=.ll}
+
 xdp_server4_kern.o: xdp_server4_kern.c 
 	clang -S \
 	    -target bpf \

@@ -24,8 +24,9 @@ stats_zero = '00 00 00 00 00 00 00 00' # initialize stats to (u64) zero
 interface = args.interface
 
 try:
-    map_id = str(get_map_ids(interface)[0])
-    max_dest = get_map_entries(map_id) # map size as defined by xdp program
+    servers_map_id = str(get_map_ids(interface)[0])
+    ips_map_id = str(get_map_ids(interface)[1])
+    max_dest = get_map_entries(servers_map_id) # map size as defined by xdp program
 except:
     print("Error finding map for dev: %s" % interface)
     sys.exit(1)
@@ -61,13 +62,16 @@ for key in range (0, max_dest):
     dmac = [str(int(byte, 16)) for byte in dmac_hex] # convert hex to integers
 
     # Fill in map using struct iptnl_info arrangement as specified in l4lb_xdp.c
-    COMMAND = (['map update id', map_id,
+    COMMAND = (['map update id', servers_map_id,
                 'key', keyval1, keyval2, '00 00',
                 'value', saddr[0], saddr[1], saddr[2], saddr[3],
                          daddr[0], daddr[1], daddr[2], daddr[3],
                          stats_zero, stats_zero,
                          dmac[0], dmac[1], dmac[2], dmac[3], dmac[4], dmac[5],
-                         '00 00 \n'])
+                         '00 00 \n',
+                'map update id', ips_map_id,
+                'key', daddr[0], daddr[1], daddr[2], daddr[3],
+                'value', keyval1, keyval2, '00 00'])
     COMMAND = ' '.join(COMMAND)
     batchfile.write(COMMAND)
 

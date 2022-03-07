@@ -45,6 +45,8 @@ typedef struct server_info{
 #endif
 
 #define MAX_SERVERS 512
+#define MAX_FLOWS 4096
+#define MAX_CLIENTS 65343
 /* 0x3FFF mask to check for fragment offset field */
 #define IP_FRAGMENTED 65343
 
@@ -62,5 +64,24 @@ struct dest_info {
 	__u32 daddr;
 	__u64 bytes;
 	__u64 pkts;
-	__u8 dmac[6];
+	// __u8 dmac[6];
+};
+
+struct server_ip_key {
+	__u32 servers_key;
+};
+
+struct client_port_ip {
+	__u32 client_ip;
+};
+
+// struct server_port_map {
+// 	__u16 dport;
+// 	__u32 daddr;
+// 	__u32 servers_key;
+// };
+
+struct port_map {
+	__u16 dport;
+	__u32 daddr;
 };

@@ -17,11 +17,41 @@
 #include "jhash.h"
 #include "common.h"
 
+#define BALANCER 3
+
 struct bpf_map_def SEC("maps") servers = {
 	.type = BPF_MAP_TYPE_HASH,
 	.key_size = sizeof(__u32),
 	.value_size = sizeof(struct dest_info),
 	.max_entries = MAX_SERVERS,
+};
+
+struct bpf_map_def SEC("maps") server_ips = {
+	.type = BPF_MAP_TYPE_HASH,
+	.key_size = sizeof(__u32),
+	.value_size = sizeof(struct server_ip_key),
+	.max_entries = MAX_SERVERS,
+};
+
+struct bpf_map_def SEC("maps") client_ips = {
+	.type = BPF_MAP_TYPE_HASH,
+	.key_size = sizeof(__u16),
+	.value_size = sizeof(struct client_port_ip),
+	.max_entries = MAX_CLIENTS,
+};
+
+struct bpf_map_def SEC("maps") stoc_port_maps = {
+	.type = BPF_MAP_TYPE_HASH,
+	.key_size = sizeof(__u16),
+	.value_size = sizeof(struct port_map),
+	.max_entries = MAX_FLOWS,
+};
+
+struct bpf_map_def SEC("maps") ctos_port_maps = {
+	.type = BPF_MAP_TYPE_HASH,
+	.key_size = sizeof(__u16),
+	.value_size = sizeof(struct port_map),
+	.max_entries = MAX_FLOWS,
 };
 
 static __always_inline struct dest_info *hash_get_dest(struct pkt_meta *pkt)
@@ -40,6 +70,41 @@ static __always_inline struct dest_info *hash_get_dest(struct pkt_meta *pkt)
 		tnl = bpf_map_lookup_elem(&servers, &key);
 	}
 	return tnl;
+}
+
+static __always_inline struct port_map *hash_get_port(struct pkt_meta *pkt, bool isFromServers)
+{
+	__u16 key;
+	struct port_map *tnl;
+
+	key = pkt->port16[0];
+	
+	tnl = (isFromServers) ? bpf_map_lookup_elem(&stoc_port_maps, &key) :
+							bpf_map_lookup_elem(&ctos_port_maps, &key);
+	return tnl;
+}
+
+static __always_inline struct client_port_ip *hash_get_client_ip
+				(__u16 port)
+{
+	__u16 key;
+	struct client_port_ip *tnl;
+
+	key = port;
+	
+	tnl = bpf_map_lookup_elem(&client_ips, &key);
+	return tnl;
+}
+
+static __always_inline bool is_from_back_servers(unsigned int source_address){
+	__u32 key = source_address;
+	struct server_ip_key *tnl;
+	
+	tnl = bpf_map_lookup_elem(&server_ips, &key);
+	if (!tnl) {
+		return false;
+	}
+	return true;
 }
 
 static __always_inline bool parse_udp(void *data, __u64 off, void *data_end,
@@ -72,47 +137,17 @@ static __always_inline bool parse_tcp(void *data, __u64 off, void *data_end,
 	return true;
 }
 
-static __always_inline void set_ethhdr(struct ethhdr *new_eth,
-				       const struct ethhdr *old_eth,
-				       const struct dest_info *tnl,
-				       __be16 h_proto)
-{
-	memcpy(new_eth->h_source, old_eth->h_dest, sizeof(new_eth->h_source));
-	memcpy(new_eth->h_dest, tnl->dmac, sizeof(new_eth->h_dest));
-	new_eth->h_proto = h_proto;
-}
-
-static __always_inline bool is_from_back_servers(unsigned int source_address){
-	__u32 key;
-	struct dest_info *tnl;
-#pragma unroll
-	for (int i = 0 ; i < MAX_SERVERS ; i++){
-		key = 0;
-		tnl = bpf_map_lookup_elem(&servers, &key);
-		if (!tnl)
-			return XDP_DROP;
-		if (tnl->daddr == source_address){
-			return true;
-		}
-	}
-	return false;
-}
-
 static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 {
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
 	struct pkt_meta pkt = {};
-	struct ethhdr *new_eth;
-	struct ethhdr *old_eth;
-	struct dest_info *tnl;
-	struct iphdr iph_tnl;
+	struct dest_info *dest_tnl;
+	struct port_map *port_tnl;
 	struct iphdr *iph;
-	__u16 *next_iph_u16;
 	__u16 pkt_size;
-	__u16 payload_len;
 	__u8 protocol;
-	u32 csum = 0;
+	bool isFromServers;
 
 	iph = data + off;
 	if (iph + 1 > data_end)
@@ -121,57 +156,12 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 		return XDP_DROP;
 	bpf_printk("it\'s an ip packet from %x" , iph->saddr);
 	protocol = iph->protocol;
-	payload_len = bpf_ntohs(iph->tot_len);
+	// payload_len = bpf_ntohs(iph->tot_len);
 	off += sizeof(struct iphdr);
 
 	/* do not support fragmented packets as L4 headers may be missing */
 	if (iph->frag_off & IP_FRAGMENTED)
 		return XDP_DROP;
-
-	if (iph->protocol == IPPROTO_IPIP){
-		if (bpf_xdp_adjust_head(ctx, 0 + (int)sizeof(struct ethhdr) + (int)sizeof(struct iphdr)))
-			return XDP_DROP;
-		data = (void *)(long)ctx->data;
-		data_end = (void *)(long)ctx->data_end;
-		struct ethhdr *eth = data;
-		if (eth + 1 > data_end)
-			return XDP_DROP;
-		struct iphdr *iph = data + sizeof(struct ethhdr);
-		if (iph + 1 > data_end)
-			return XDP_DROP;
-		unsigned int addrtemp = iph->saddr;
-		iph->saddr = iph->daddr;
-		iph->daddr = addrtemp;
-
-		__u8 tempMac[6];
-		memcpy(tempMac, eth->h_dest, sizeof(eth->h_dest));
-		memcpy(eth->h_dest, eth->h_source, sizeof(eth->h_source));
-		memcpy(eth->h_source, tempMac, sizeof(tempMac));
-
-		if (iph->protocol == IPPROTO_TCP){
-			if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct tcphdr) > data_end)
-				return XDP_DROP;
-			struct tcphdr *tcph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-			if(tcph + 1 > data_end)
-				return XDP_DROP;
-			unsigned short tempPort = tcph->dest;
-			tcph->dest = tcph->source;
-			tcph->source = tempPort;
-		}
-		else{
-			if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr) > data_end)
-				return XDP_DROP;
-			struct udphdr *udph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-			if(udph + 1 > data_end)
-				return XDP_DROP;
-			unsigned short tempPort = udph->dest;
-			udph->dest = udph->source;
-			udph->source = tempPort;
-		}
-		iph->check = iph_csum(iph);
-		
-		return XDP_TX;
-	}
 
 	pkt.src = iph->saddr;
 	pkt.dst = iph->daddr;
@@ -187,57 +177,71 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 		return XDP_PASS;
 	}
 
-	/* allocate a destination using packet hash and map lookup */
-	tnl = hash_get_dest(&pkt);
-	if (!tnl)
-		return XDP_DROP;
-
-	/* extend the packet for ip header encapsulation */
-	if (bpf_xdp_adjust_head(ctx, 0 - (int)sizeof(struct iphdr) - (int)sizeof(struct ethhdr)))
-		return XDP_DROP;
-
 	data = (void *)(long)ctx->data;
 	data_end = (void *)(long)ctx->data_end;
 
-	/* relocate ethernet header to start of packet and set MACs */
-	new_eth = data;
-	old_eth = data + sizeof(*iph) + sizeof(struct ethhdr);
+	isFromServers = is_from_back_servers(iph->saddr);
+	port_tnl = hash_get_port(&pkt, isFromServers);
+	if(isFromServers)
+	{
+		struct client_port_ip *dst;
+		dst = hash_get_client_ip(pkt.port16[1]);
+		if(!dst)
+			return XDP_DROP;
+		if(!port_tnl)
+		{
+			__u16 key1, key2;
+			struct port_map val1, val2;
+			key1 = pkt.port16[0];
+			key2 = pkt.port16[1];
+			val1.daddr = dst->client_ip;
+			val1.dport = key2;
+			bpf_map_update_elem(&stoc_port_maps, &key1, &val1, 0);
+			val2.daddr = pkt.src;
+			val2.dport = key1;
+			bpf_map_update_elem(&ctos_port_maps, &key2, &val2, 0);
+		}
+		iph->saddr = IP_ADDRESS(BALANCER);
+		iph->daddr = dst->client_ip;
+	}
+	else
+	{
+		if(!port_tnl)
+		{
+			__u16 key;
+			struct client_port_ip val;
+			struct client_port_ip *test;
+			
+			/* allocate a destination using packet hash and map lookup,
+			could be replaced with custom balancing algorithms */
+			dest_tnl = hash_get_dest(&pkt);
+			
+			key = pkt.port16[0];
+			val.client_ip = pkt.src;
 
-	if (new_eth + 1 > data_end || old_eth + 1 > data_end ||
-	    iph + 1 > data_end)
-		return XDP_DROP;
+			test = hash_get_client_ip(key);
+			if(test) {
+				bpf_printk("client port %d busy", key);
+				return XDP_DROP;
+			}
+			bpf_map_update_elem(&client_ips, &key, &val, 0);
+			
+			/* increment map counters */
+			pkt_size = (__u16)(data_end - data); /* payload size excl L2 crc */
+			__sync_fetch_and_add(&dest_tnl->pkts, 1);
+			__sync_fetch_and_add(&dest_tnl->bytes, pkt_size);
+			
+			iph->saddr = IP_ADDRESS(BALANCER);
+			iph->daddr = dest_tnl->daddr;
+		}
+		else
+		{
+			iph->saddr = IP_ADDRESS(BALANCER);
+			iph->daddr = port_tnl->daddr;
+		}
+	}
 
-	set_ethhdr(new_eth, old_eth, tnl, bpf_htons(ETH_P_IP));
-
-	/* create an additional ip header for encapsulation */
-	iph_tnl.version = 4;
-	iph_tnl.ihl = sizeof(*iph) >> 2;
-	iph_tnl.frag_off = 0;
-	iph_tnl.protocol = IPPROTO_IPIP;
-	iph_tnl.check = 0;
-	iph_tnl.id = 0;
-	iph_tnl.tos = 0;
-	iph_tnl.tot_len = bpf_htons(payload_len + sizeof(*iph) + sizeof(struct ethhdr));
-	iph_tnl.daddr = tnl->daddr;
-	iph_tnl.saddr = tnl->saddr;
-	iph_tnl.ttl = 8;
-
-	/* calculate ip header checksum */
-	next_iph_u16 = (__u16 *)&iph_tnl;
-	#pragma clang loop unroll(full)
-	for (int i = 0; i < (int)sizeof(*iph) >> 1; i++)
-		csum += *next_iph_u16++;
-	iph_tnl.check = ~((csum & 0xffff) + (csum >> 16));
-
-	iph = data + sizeof(*new_eth);
-	*iph = iph_tnl;
-
-	/* increment map counters */
-	pkt_size = (__u16)(data_end - data); /* payload size excl L2 crc */
-	__sync_fetch_and_add(&tnl->pkts, 1);
-	__sync_fetch_and_add(&tnl->bytes, pkt_size);
-
-	bpf_printk("in p packet size: %x" , data_end - data);
+	iph->check = iph_csum(iph);
 
 	return XDP_TX;
 }
