@@ -54,6 +54,7 @@ struct pkt_meta {
 	__be32 src;
 	__be32 dst;
 	__u8 smac[6];
+	__u8 dmac[6];
 	union {
 		__u32 ports;
 		__u16 port16[2];
@@ -86,4 +87,5 @@ struct client_port_addr {
 struct port_map {
 	__u16 dport;
 	__u32 daddr;
+	__u8 dmac[8];
 };

@@ -169,6 +169,19 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 
 	pkt.src = iph->saddr;
 	pkt.dst = iph->daddr;
+	pkt.smac[0] = eth->h_source[0];
+	pkt.smac[1] = eth->h_source[1];
+	pkt.smac[2] = eth->h_source[2];
+	pkt.smac[3] = eth->h_source[3];
+	pkt.smac[4] = eth->h_source[4];
+	pkt.smac[5] = eth->h_source[5];
+
+	pkt.dmac[0] = eth->h_dest[0];
+	pkt.dmac[1] = eth->h_dest[1];
+	pkt.dmac[2] = eth->h_dest[2];
+	pkt.dmac[3] = eth->h_dest[3];
+	pkt.dmac[4] = eth->h_dest[4];
+	pkt.dmac[5] = eth->h_dest[5];
 
 	/* obtain port numbers for UDP and TCP traffic */
 	if (protocol == IPPROTO_TCP) {
@@ -200,9 +213,21 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 			key2 = pkt.port16[1];
 			val1.daddr = dst->client_ip;
 			val1.dport = key2;
+			val1.dmac[0] = pkt.dmac[0];
+			val1.dmac[1] = pkt.dmac[1];
+			val1.dmac[2] = pkt.dmac[2];
+			val1.dmac[3] = pkt.dmac[3];
+			val1.dmac[4] = pkt.dmac[4];
+			val1.dmac[5] = pkt.dmac[5];
 			bpf_map_update_elem(&stoc_port_maps, &key1, &val1, 0);
 			val2.daddr = pkt.src;
 			val2.dport = key1;
+			val2.dmac[0] = pkt.smac[0];
+			val2.dmac[1] = pkt.smac[1];
+			val2.dmac[2] = pkt.smac[2];
+			val2.dmac[3] = pkt.smac[3];
+			val2.dmac[4] = pkt.smac[4];
+			val2.dmac[5] = pkt.smac[5];
 			bpf_map_update_elem(&ctos_port_maps, &key2, &val2, 0);
 		}
 		iph->saddr = IP_ADDRESS(BALANCER);
@@ -251,7 +276,7 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 			bpf_map_update_elem(&client_addrs, &key, &val, 0);
 		}	
 		iph->saddr = IP_ADDRESS(BALANCER);
-		iph->daddr = dest_tnl->daddr;
+		iph->daddr = port_tnl->daddr;
 
 		eth->h_source[0] = eth->h_dest[0];
 		eth->h_source[1] = eth->h_dest[1];
@@ -260,12 +285,12 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 		eth->h_source[4] = eth->h_dest[4];
 		eth->h_source[5] = eth->h_dest[5];
 
-		eth->h_dest[0] = dest_tnl->dmac[0];
-		eth->h_dest[1] = dest_tnl->dmac[1];
-		eth->h_dest[2] = dest_tnl->dmac[2];
-		eth->h_dest[3] = dest_tnl->dmac[3];
-		eth->h_dest[4] = dest_tnl->dmac[4];
-		eth->h_dest[5] = dest_tnl->dmac[5];
+		eth->h_dest[0] = port_tnl->dmac[0];
+		eth->h_dest[1] = port_tnl->dmac[1];
+		eth->h_dest[2] = port_tnl->dmac[2];
+		eth->h_dest[3] = port_tnl->dmac[3];
+		eth->h_dest[4] = port_tnl->dmac[4];
+		eth->h_dest[5] = port_tnl->dmac[5];
 
 		/* increment map counters */
 		pkt_size = (__u16)(data_end - data); /* payload size excl L2 crc */
