@@ -53,6 +53,7 @@ typedef struct server_info{
 struct pkt_meta {
 	__be32 src;
 	__be32 dst;
+	__u8 smac[6];
 	union {
 		__u32 ports;
 		__u16 port16[2];
@@ -64,15 +65,16 @@ struct dest_info {
 	__u32 daddr;
 	__u64 bytes;
 	__u64 pkts;
-	// __u8 dmac[6];
+	__u8 dmac[6];
 };
 
 struct server_ip_key {
 	__u32 servers_key;
 };
 
-struct client_port_ip {
+struct client_port_addr {
 	__u32 client_ip;
+	__u8 dmac[6];
 };
 
 // struct server_port_map {

@@ -33,10 +33,10 @@ struct bpf_map_def SEC("maps") server_ips = {
 	.max_entries = MAX_SERVERS,
 };
 
-struct bpf_map_def SEC("maps") client_ips = {
+struct bpf_map_def SEC("maps") client_addrs = {
 	.type = BPF_MAP_TYPE_HASH,
 	.key_size = sizeof(__u16),
-	.value_size = sizeof(struct client_port_ip),
+	.value_size = sizeof(struct client_port_addr),
 	.max_entries = MAX_CLIENTS,
 };
 
@@ -84,15 +84,15 @@ static __always_inline struct port_map *hash_get_port(struct pkt_meta *pkt, bool
 	return tnl;
 }
 
-static __always_inline struct client_port_ip *hash_get_client_ip
+static __always_inline struct client_port_addr *hash_get_client_ip
 				(__u16 port)
 {
 	__u16 key;
-	struct client_port_ip *tnl;
+	struct client_port_addr *tnl;
 
 	key = port;
 	
-	tnl = bpf_map_lookup_elem(&client_ips, &key);
+	tnl = bpf_map_lookup_elem(&client_addrs, &key);
 	return tnl;
 }
 
@@ -144,11 +144,15 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 	struct pkt_meta pkt = {};
 	struct dest_info *dest_tnl;
 	struct port_map *port_tnl;
+	struct ethhdr *eth;
 	struct iphdr *iph;
 	__u16 pkt_size;
 	__u8 protocol;
 	bool isFromServers;
 
+	eth = data;
+	if (eth + 1 > data_end)
+		return XDP_DROP;
 	iph = data + off;
 	if (iph + 1 > data_end)
 		return XDP_DROP;
@@ -184,7 +188,7 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 	port_tnl = hash_get_port(&pkt, isFromServers);
 	if(isFromServers)
 	{
-		struct client_port_ip *dst;
+		struct client_port_addr *dst;
 		dst = hash_get_client_ip(pkt.port16[1]);
 		if(!dst)
 			return XDP_DROP;
@@ -203,14 +207,28 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 		}
 		iph->saddr = IP_ADDRESS(BALANCER);
 		iph->daddr = dst->client_ip;
+
+		eth->h_source[0] = eth->h_dest[0];
+		eth->h_source[1] = eth->h_dest[1];
+		eth->h_source[2] = eth->h_dest[2];
+		eth->h_source[3] = eth->h_dest[3];
+		eth->h_source[4] = eth->h_dest[4];
+		eth->h_source[5] = eth->h_dest[5];
+
+		eth->h_dest[0] = dst->dmac[0];
+		eth->h_dest[1] = dst->dmac[1];
+		eth->h_dest[2] = dst->dmac[2];
+		eth->h_dest[3] = dst->dmac[3];
+		eth->h_dest[4] = dst->dmac[4];
+		eth->h_dest[5] = dst->dmac[5];
 	}
 	else
 	{
 		if(!port_tnl)
 		{
 			__u16 key;
-			struct client_port_ip val;
-			struct client_port_ip *test;
+			struct client_port_addr val;
+			// struct client_port_addr *test;
 			
 			/* allocate a destination using packet hash and map lookup,
 			could be replaced with custom balancing algorithms */
@@ -218,27 +236,41 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 			
 			key = pkt.port16[0];
 			val.client_ip = pkt.src;
+			val.dmac[0] = pkt.smac[0];
+			val.dmac[1] = pkt.smac[1];
+			val.dmac[2] = pkt.smac[2];
+			val.dmac[3] = pkt.smac[3];
+			val.dmac[4] = pkt.smac[4];
+			val.dmac[5] = pkt.smac[5];
 
-			test = hash_get_client_ip(key);
-			if(test) {
-				bpf_printk("client port %d busy", key);
-				return XDP_DROP;
-			}
-			bpf_map_update_elem(&client_ips, &key, &val, 0);
-			
-			/* increment map counters */
-			pkt_size = (__u16)(data_end - data); /* payload size excl L2 crc */
-			__sync_fetch_and_add(&dest_tnl->pkts, 1);
-			__sync_fetch_and_add(&dest_tnl->bytes, pkt_size);
-			
-			iph->saddr = IP_ADDRESS(BALANCER);
-			iph->daddr = dest_tnl->daddr;
-		}
-		else
-		{
-			iph->saddr = IP_ADDRESS(BALANCER);
-			iph->daddr = port_tnl->daddr;
-		}
+			// test = hash_get_client_ip(key);
+			// if(test) {
+			// 	bpf_printk("client port %d busy", key);
+			// 	return XDP_DROP;
+			// }
+			bpf_map_update_elem(&client_addrs, &key, &val, 0);
+		}	
+		iph->saddr = IP_ADDRESS(BALANCER);
+		iph->daddr = dest_tnl->daddr;
+
+		eth->h_source[0] = eth->h_dest[0];
+		eth->h_source[1] = eth->h_dest[1];
+		eth->h_source[2] = eth->h_dest[2];
+		eth->h_source[3] = eth->h_dest[3];
+		eth->h_source[4] = eth->h_dest[4];
+		eth->h_source[5] = eth->h_dest[5];
+
+		eth->h_dest[0] = dest_tnl->dmac[0];
+		eth->h_dest[1] = dest_tnl->dmac[1];
+		eth->h_dest[2] = dest_tnl->dmac[2];
+		eth->h_dest[3] = dest_tnl->dmac[3];
+		eth->h_dest[4] = dest_tnl->dmac[4];
+		eth->h_dest[5] = dest_tnl->dmac[5];
+
+		/* increment map counters */
+		pkt_size = (__u16)(data_end - data); /* payload size excl L2 crc */
+		__sync_fetch_and_add(&dest_tnl->pkts, 1);
+		__sync_fetch_and_add(&dest_tnl->bytes, pkt_size);
 	}
 
 	iph->check = iph_csum(iph);
