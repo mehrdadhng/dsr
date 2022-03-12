@@ -61,21 +61,34 @@ struct pkt_meta {
 	};
 };
 
+struct port_key {
+	__u16 port;
+	__u16 pad[3];
+};
+
+struct ip_key {
+	__u32 key;
+	__u32 pad;
+};
+
 struct dest_info {
 	__u32 saddr;
 	__u32 daddr;
 	__u64 bytes;
 	__u64 pkts;
 	__u8 dmac[6];
+	__u16 pad;
 };
 
 struct server_ip_key {
 	__u32 servers_key;
+	__u32 pad;
 };
 
 struct client_port_addr {
 	__u32 client_ip;
 	__u8 dmac[6];
+	__u16 pad[3];
 };
 
 // struct server_port_map {
@@ -87,5 +100,6 @@ struct client_port_addr {
 struct port_map {
 	__u16 dport;
 	__u32 daddr;
-	__u8 dmac[8];
+	__u8 dmac[6];
+	__u32 pad;
 };

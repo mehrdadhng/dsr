@@ -21,83 +21,97 @@
 
 struct bpf_map_def SEC("maps") servers = {
 	.type = BPF_MAP_TYPE_HASH,
-	.key_size = sizeof(__u32),
+	.key_size = sizeof(struct ip_key),
 	.value_size = sizeof(struct dest_info),
 	.max_entries = MAX_SERVERS,
 };
 
 struct bpf_map_def SEC("maps") server_ips = {
 	.type = BPF_MAP_TYPE_HASH,
-	.key_size = sizeof(__u32),
+	.key_size = sizeof(struct ip_key),
 	.value_size = sizeof(struct server_ip_key),
 	.max_entries = MAX_SERVERS,
 };
 
 struct bpf_map_def SEC("maps") client_addrs = {
 	.type = BPF_MAP_TYPE_HASH,
-	.key_size = sizeof(__u16),
+	.key_size = sizeof(struct port_key),
 	.value_size = sizeof(struct client_port_addr),
 	.max_entries = MAX_CLIENTS,
 };
 
 struct bpf_map_def SEC("maps") stoc_port_maps = {
 	.type = BPF_MAP_TYPE_HASH,
-	.key_size = sizeof(__u16),
+	.key_size = sizeof(struct port_key),
 	.value_size = sizeof(struct port_map),
 	.max_entries = MAX_FLOWS,
 };
 
 struct bpf_map_def SEC("maps") ctos_port_maps = {
 	.type = BPF_MAP_TYPE_HASH,
-	.key_size = sizeof(__u16),
+	.key_size = sizeof(struct port_key),
 	.value_size = sizeof(struct port_map),
 	.max_entries = MAX_FLOWS,
 };
 
 static __always_inline struct dest_info *hash_get_dest(struct pkt_meta *pkt)
 {
-	__u32 key;
+	struct ip_key key;
 	struct dest_info *tnl;
 
 	/* hash packet source ip with both ports to obtain a destination */
-	key = jhash_2words(pkt->src, pkt->ports, MAX_SERVERS) % MAX_SERVERS;
+	key.key = jhash_2words(pkt->src, pkt->ports, MAX_SERVERS) % MAX_SERVERS;
+	key.pad = 0;
 
 	/* get destination's network details from map */
 	tnl = bpf_map_lookup_elem(&servers, &key);
-	if (!tnl) {
+	if (tnl) {
 		/* if entry does not exist, fallback to key 0 */
-		key = 0;
-		tnl = bpf_map_lookup_elem(&servers, &key);
+		// key.key = 0;
+		// tnl = bpf_map_lookup_elem(&servers, &key);
+		return tnl;
 	}
-	return tnl;
+	return NULL;
 }
 
 static __always_inline struct port_map *hash_get_port(struct pkt_meta *pkt, bool isFromServers)
 {
-	__u16 key;
+	struct port_key key;
 	struct port_map *tnl;
 
-	key = pkt->port16[0];
+	key.port = pkt->port16[0];
+	key.pad[0] = 0;
+	key.pad[1] = 0;
+	key.pad[2] = 0;
 	
 	tnl = (isFromServers) ? bpf_map_lookup_elem(&stoc_port_maps, &key) :
 							bpf_map_lookup_elem(&ctos_port_maps, &key);
-	return tnl;
+	if(tnl) {
+		return tnl;
+	}
+	return NULL;
 }
 
-static __always_inline struct client_port_addr *hash_get_client_ip
-				(__u16 port)
+static __always_inline struct client_port_addr *hash_get_client_ip(__u16 port)
 {
-	__u16 key;
+	struct port_key key;
 	struct client_port_addr *tnl;
 
-	key = port;
+	key.port = port;
+	key.pad[0] = 0;
+	key.pad[1] = 0;
+	key.pad[2] = 0;
 	
 	tnl = bpf_map_lookup_elem(&client_addrs, &key);
-	return tnl;
+	if(tnl)
+		return tnl;
+	return NULL;
 }
 
 static __always_inline bool is_from_back_servers(unsigned int source_address){
-	__u32 key = source_address;
+	struct ip_key key;
+	key.key = source_address;
+	key.pad = 0;
 	struct server_ip_key *tnl;
 	
 	tnl = bpf_map_lookup_elem(&server_ips, &key);
@@ -146,7 +160,6 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 	struct port_map *port_tnl;
 	struct ethhdr *eth;
 	struct iphdr *iph;
-	__u16 pkt_size;
 	__u8 protocol;
 	bool isFromServers;
 
@@ -194,9 +207,6 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 		return XDP_PASS;
 	}
 
-	data = (void *)(long)ctx->data;
-	data_end = (void *)(long)ctx->data_end;
-
 	isFromServers = is_from_back_servers(iph->saddr);
 	port_tnl = hash_get_port(&pkt, isFromServers);
 	if(isFromServers)
@@ -207,28 +217,36 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 			return XDP_DROP;
 		if(!port_tnl)
 		{
-			__u16 key1, key2;
+			struct port_key key1, key2;
 			struct port_map val1, val2;
-			key1 = pkt.port16[0];
-			key2 = pkt.port16[1];
+			key1.port = pkt.port16[0];
+			key1.pad[0] = 0;
+			key1.pad[1] = 0;
+			key1.pad[2] = 0;
+			key2.port = pkt.port16[1];
+			key2.pad[0] = 0;
+			key2.pad[1] = 0;
+			key2.pad[2] = 0;
 			val1.daddr = dst->client_ip;
-			val1.dport = key2;
+			val1.dport = key2.port;
 			val1.dmac[0] = dst->dmac[0];
 			val1.dmac[1] = dst->dmac[1];
 			val1.dmac[2] = dst->dmac[2];
 			val1.dmac[3] = dst->dmac[3];
 			val1.dmac[4] = dst->dmac[4];
 			val1.dmac[5] = dst->dmac[5];
-			bpf_map_update_elem(&stoc_port_maps, &key1, &val1, 0);
+			val1.pad = 0;
+			// bpf_map_update_elem(&stoc_port_maps, &key1, &val1, BPF_ANY);
 			val2.daddr = pkt.src;
-			val2.dport = key1;
+			val2.dport = key1.port;
 			val2.dmac[0] = pkt.smac[0];
 			val2.dmac[1] = pkt.smac[1];
 			val2.dmac[2] = pkt.smac[2];
 			val2.dmac[3] = pkt.smac[3];
 			val2.dmac[4] = pkt.smac[4];
 			val2.dmac[5] = pkt.smac[5];
-			bpf_map_update_elem(&ctos_port_maps, &key2, &val2, 0);
+			val2.pad = 0;
+			// bpf_map_update_elem(&ctos_port_maps, &key2, &val2, BPF_ANY);
 		}
 		iph->saddr = IP_ADDRESS(BALANCER);
 		iph->daddr = dst->client_ip;
@@ -255,9 +273,18 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 			struct client_port_addr val;
 			// struct client_port_addr *test;
 			
-			/* allocate a destination using packet hash and map lookup,
-			could be replaced with custom balancing algorithms */
-			dest_tnl = hash_get_dest(&pkt);
+			// allocate a destination using packet hash and map lookup,
+			// could be replaced with custom balancing algorithms
+			struct ip_key tnl_key;
+			tnl_key.key = jhash_2words(pkt.src, pkt.ports, MAX_SERVERS) % MAX_SERVERS;
+			tnl_key.pad = 0;
+			dest_tnl = bpf_map_lookup_elem(&servers, &key);
+			if (!dest_tnl) {
+				/* if entry does not exist, fallback to key 0 */
+				// key.key = 0;
+				// tnl = bpf_map_lookup_elem(&servers, &key);
+				return XDP_ABORTED;
+			}
 			
 			key = pkt.port16[0];
 			val.client_ip = pkt.src;
@@ -273,7 +300,7 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 			// 	bpf_printk("client port %d busy", key);
 			// 	return XDP_DROP;
 			// }
-			bpf_map_update_elem(&client_addrs, &key, &val, 0);
+			bpf_map_update_elem(&client_addrs, &key, &val, BPF_ANY);
 
 			iph->saddr = IP_ADDRESS(BALANCER);
 			iph->daddr = dest_tnl->daddr;
@@ -291,11 +318,6 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 			eth->h_dest[3] = dest_tnl->dmac[3];
 			eth->h_dest[4] = dest_tnl->dmac[4];
 			eth->h_dest[5] = dest_tnl->dmac[5];
-
-			// /* increment map counters */
-			// pkt_size = (__u16)(data_end - data); /* payload size excl L2 crc */
-			// __sync_fetch_and_add(&dest_tnl->pkts, 1);
-			// __sync_fetch_and_add(&dest_tnl->bytes, pkt_size);
 
 		}
 		else{
@@ -315,13 +337,13 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 			eth->h_dest[3] = port_tnl->dmac[3];
 			eth->h_dest[4] = port_tnl->dmac[4];
 			eth->h_dest[5] = port_tnl->dmac[5];
+			// memcpy (destination, source, sizeof(source));
 		}
-
+	}
 		// /* increment map counters */
 		// pkt_size = (__u16)(data_end - data); /* payload size excl L2 crc */
 		// __sync_fetch_and_add(&dest_tnl->pkts, 1);
 		// __sync_fetch_and_add(&dest_tnl->bytes, pkt_size);
-	}
 
 	iph->check = iph_csum(iph);
 
