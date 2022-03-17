@@ -54,44 +54,6 @@ struct bpf_map_def SEC("maps") ctos_port_maps = {
 	.max_entries = MAX_FLOWS,
 };
 
-static __always_inline struct dest_info *hash_get_dest(struct pkt_meta *pkt)
-{
-	struct ip_key key;
-	struct dest_info *tnl;
-
-	/* hash packet source ip with both ports to obtain a destination */
-	key.key = jhash_2words(pkt->src, pkt->ports, MAX_SERVERS) % MAX_SERVERS;
-	key.pad = 0;
-
-	/* get destination's network details from map */
-	tnl = bpf_map_lookup_elem(&servers, &key);
-	if (tnl) {
-		/* if entry does not exist, fallback to key 0 */
-		// key.key = 0;
-		// tnl = bpf_map_lookup_elem(&servers, &key);
-		return tnl;
-	}
-	return NULL;
-}
-
-static __always_inline struct port_map *hash_get_port(struct pkt_meta *pkt, bool isFromServers)
-{
-	struct port_key key;
-	struct port_map *tnl;
-
-	key.port = pkt->port16[0];
-	key.pad[0] = 0;
-	key.pad[1] = 0;
-	key.pad[2] = 0;
-	
-	tnl = (isFromServers) ? bpf_map_lookup_elem(&stoc_port_maps, &key) :
-							bpf_map_lookup_elem(&ctos_port_maps, &key);
-	if(tnl) {
-		return tnl;
-	}
-	return NULL;
-}
-
 static __always_inline struct client_port_addr *hash_get_client_ip(__u16 port)
 {
 	struct port_key key;
@@ -208,7 +170,21 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 	}
 
 	isFromServers = is_from_back_servers(iph->saddr);
-	port_tnl = hash_get_port(&pkt, isFromServers);
+
+	struct port_key port_key;
+
+	port_key.port = pkt.port16[0];
+	port_key.pad[0] = 0;
+	port_key.pad[1] = 0;
+	port_key.pad[2] = 0;
+	
+	port_tnl = (isFromServers) ? bpf_map_lookup_elem(&stoc_port_maps, &port_key) :
+							bpf_map_lookup_elem(&ctos_port_maps, &port_key);
+	if(!port_tnl) {
+		return XDP_DROP;
+	}
+
+	// port_tnl = hash_get_port(&pkt, isFromServers);
 	if(isFromServers)
 	{
 		struct client_port_addr *dst;
@@ -295,11 +271,6 @@ static __always_inline int process_packet(struct xdp_md *ctx, __u64 off)
 			val.dmac[4] = pkt.smac[4];
 			val.dmac[5] = pkt.smac[5];
 
-			// test = hash_get_client_ip(key);
-			// if(test) {
-			// 	bpf_printk("client port %d busy", key);
-			// 	return XDP_DROP;
-			// }
 			bpf_map_update_elem(&client_addrs, &key, &val, BPF_ANY);
 
 			iph->saddr = IP_ADDRESS(BALANCER);
